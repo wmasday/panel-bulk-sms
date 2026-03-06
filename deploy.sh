@@ -11,6 +11,9 @@ if [ ! -f .env ]; then
 fi
 
 # Build and start services
+echo "📦 Cleaning up old containers..."
+docker compose down
+
 echo "📦 Building and starting containers..."
 docker compose up -d --build
 
