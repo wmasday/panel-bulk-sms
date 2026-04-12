@@ -191,9 +191,14 @@ async function renderPhones() {
                 <h2 class="text-3xl font-extrabold text-slate-800">Phones</h2>
                 <p class="text-slate-500">Manage individual sender numbers</p>
             </div>
-            <button onclick="addPhone()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center">
-                <i class="fas fa-plus mr-2 text-xs"></i> New Phone
-            </button>
+            <div class="flex space-x-3">
+                <button onclick="bulkAddPhone()" class="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-slate-200 flex items-center">
+                    <i class="fas fa-file-import mr-2 text-xs"></i> Bulk Add
+                </button>
+                <button onclick="addPhone()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center">
+                    <i class="fas fa-plus mr-2 text-xs"></i> New Phone
+                </button>
+            </div>
         </div>
         
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden page-enter">
@@ -287,6 +292,77 @@ async function addPhone() {
         if (!formValues.phone) return Swal.fire({ icon: 'error', title: 'Wait...', text: 'Phone number is required' });
         await apiCall('/phones', 'POST', formValues);
         Swal.fire({ icon: 'success', title: 'Saved!', toast: true, position: 'top-end', timer: 2000, showConfirmButton: false });
+        router.navigate('phones');
+    }
+}
+
+async function bulkAddPhone() {
+    if (state.data.groups.length === 0) await apiCall('/groups').then(d => state.data.groups = d);
+
+    const { value: formValues } = await Swal.fire({
+        title: 'Bulk Mass Import',
+        html: `
+            <div class="text-left space-y-4 pt-4">
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Phone Numbers (One per line or comma-separated)</label>
+                    <textarea id="swal-phones-mass" class="swal2-textarea !mt-1 w-full m-0 rounded-xl" style="height: 150px" placeholder="081234567890\n089876543210"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Channel Type</label>
+                        <select id="swal-type" class="swal2-input !mt-1 !w-full rounded-xl">
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="sms">SMS</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Assign to Group</label>
+                        <select id="swal-group-id" class="swal2-input !mt-1 !w-full rounded-xl">
+                            <option value="">No Group</option>
+                            ${state.data.groups.map(g => `<option value="${g.id}">${g.title || `Group #${g.id}`} (${g.type})</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                ${renderToggle('swal-status', true, 'Set all as Active')}
+            </div>
+        `,
+        confirmButtonText: 'Import Numbers',
+        confirmButtonColor: '#2563eb',
+        customClass: { confirmButton: 'rounded-xl py-3 px-8' },
+        preConfirm: () => {
+            const rawText = document.getElementById('swal-phones-mass').value;
+            const type = document.getElementById('swal-type').value;
+            const group_id = document.getElementById('swal-group-id').value || null;
+            const status = document.getElementById('swal-status').checked;
+
+            // Simple parsing: split by newline or comma, then trim and filter empty
+            const phoneList = rawText.split(/[\n,]+/).map(p => p.trim()).filter(p => p.length > 0);
+
+            if (phoneList.length === 0) {
+                Swal.showValidationMessage('Please enter at least one phone number');
+                return false;
+            }
+
+            return phoneList.map(phone => ({
+                phone,
+                type,
+                group_id,
+                status
+            }));
+        }
+    });
+
+    if (formValues) {
+        await apiCall('/phones/bulk', 'POST', formValues);
+        Swal.fire({ 
+            icon: 'success', 
+            title: 'Imported!', 
+            text: `Successfully added ${formValues.length} numbers.`,
+            toast: true, 
+            position: 'top-end', 
+            timer: 3000, 
+            showConfirmButton: false 
+        });
         router.navigate('phones');
     }
 }

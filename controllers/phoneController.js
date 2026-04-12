@@ -66,3 +66,15 @@ exports.delete = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+exports.bulkCreate = async (req, res) => {
+    try {
+        if (!Array.isArray(req.body)) {
+            return res.status(400).json({ message: 'Body must be an array of phone objects' });
+        }
+        const phones = await Phone.bulkCreate(req.body);
+        res.status(201).json(phones);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+};
