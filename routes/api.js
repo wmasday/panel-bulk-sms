@@ -13,6 +13,7 @@ router.get('/phones', phoneController.getAll);
 router.get('/phones/:id', phoneController.getById);
 router.post('/phones', phoneController.create);
 router.post('/phones/bulk', phoneController.bulkCreate);
+router.post('/phones/bulk-auto-group', phoneController.bulkCreateAutoGroup);
 router.put('/phones/:id', phoneController.update);
 router.delete('/phones/:id', phoneController.delete);
 

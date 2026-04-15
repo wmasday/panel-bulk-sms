@@ -10,6 +10,13 @@ const state = {
         groups: [],
         templates: [],
         transactions: []
+    },
+    phones: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 1,
+        search: ''
     }
 };
 
@@ -181,12 +188,67 @@ function renderToggle(id, checked, label) {
 }
 
 // --- Module: Phones ---
-async function renderPhones() {
-    const phones = await apiCall('/phones');
-    state.data.phones = phones;
+
+// Debounce helper
+let _searchTimer = null;
+function debounce(fn, delay) {
+    return (...args) => {
+        clearTimeout(_searchTimer);
+        _searchTimer = setTimeout(() => fn(...args), delay);
+    };
+}
+
+
+
+async function renderPhones(resetPage = false) {
+    if (resetPage) state.phones.page = 1;
+
+    // Build query manually (apiCall adds show_all automatically via its own logic)
+    const { page, limit, search } = state.phones;
+    const qs = `/phones?page=${page}&limit=${limit}${search ? `&q=${encodeURIComponent(search)}` : ''}`;
+    const data = await apiCall(qs);
+
+    // data = { rows, total, page, totalPages, limit }
+    state.data.phones = data.rows;
+    state.phones.total      = data.total;
+    state.phones.totalPages = data.totalPages;
+    state.phones.page       = data.page;
+
+    const phones = data.rows;
+
+    // Build pagination buttons
+    function pagerBtn(p, label, disabled, active) {
+        const base   = 'inline-flex items-center justify-center w-9 h-9 rounded-lg text-sm font-semibold transition-all';
+        const style  = active
+            ? `${base} bg-blue-600 text-white shadow`
+            : disabled
+                ? `${base} text-slate-300 cursor-not-allowed`
+                : `${base} text-slate-600 hover:bg-slate-100`;
+        const click  = disabled ? '' : `onclick="goPhonePage(${p})"`;
+        return `<button ${click} class="${style}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+    }
+
+    function buildPager() {
+        const { page: cur, totalPages } = state.phones;
+        if (totalPages <= 1) return '';
+        let btns = '';
+        btns += pagerBtn(cur - 1, '<i class="fas fa-chevron-left text-xs"></i>', cur <= 1, false);
+        // show up to 7 pages with ellipsis
+        const range = [];
+        for (let p = 1; p <= totalPages; p++) {
+            if (p === 1 || p === totalPages || (p >= cur - 2 && p <= cur + 2)) range.push(p);
+            else if (range[range.length - 1] !== '...') range.push('...');
+        }
+        range.forEach(p => {
+            if (p === '...') btns += `<span class="inline-flex items-center justify-center w-9 h-9 text-slate-400 text-sm">…</span>`;
+            else btns += pagerBtn(p, p, false, p === cur);
+        });
+        btns += pagerBtn(cur + 1, '<i class="fas fa-chevron-right text-xs"></i>', cur >= totalPages, false);
+        return `<div class="flex items-center gap-1">${btns}</div>`;
+    }
 
     document.getElementById('content').innerHTML = `
-        <div class="flex justify-between items-center mb-8 page-enter">
+        <div class="flex justify-between items-center mb-6 page-enter">
             <div>
                 <h2 class="text-3xl font-extrabold text-slate-800">Phones</h2>
                 <p class="text-slate-500">Manage individual sender numbers</p>
@@ -200,7 +262,28 @@ async function renderPhones() {
                 </button>
             </div>
         </div>
-        
+
+        <!-- Search & per-page toolbar -->
+        <div class="flex flex-col sm:flex-row gap-3 mb-4 page-enter">
+            <div class="relative flex-1">
+                <i class="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                <input
+                    id="phone-search"
+                    type="text"
+                    value="${state.phones.search}"
+                    placeholder="Search phone number…"
+                    class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent shadow-sm transition"
+                />
+            </div>
+            <div class="flex items-center gap-2">
+                <label class="text-xs font-semibold text-slate-500 whitespace-nowrap">Per page</label>
+                <select id="phone-limit" class="border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    ${[10, 20, 50, 100].map(n => `<option value="${n}" ${state.phones.limit == n ? 'selected' : ''}>${n}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+
+        <!-- Table -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden page-enter">
             <table class="min-w-full divide-y divide-slate-200">
                 <thead class="bg-slate-50/50">
@@ -240,12 +323,47 @@ async function renderPhones() {
                             </td>
                         </tr>
                     `).join('')}
-                    ${phones.length === 0 ? '<tr><td colspan="5" class="px-6 py-12 text-center text-slate-400 italic">No records found</td></tr>' : ''}
+                    ${phones.length === 0 ? `<tr><td colspan="5" class="px-6 py-16 text-center text-slate-400 italic">No records found${state.phones.search ? ` for "<strong>${state.phones.search}</strong>"` : ''}</td></tr>` : ''}
                 </tbody>
             </table>
         </div>
+
+        <!-- Pagination footer -->
+        <div class="flex flex-col sm:flex-row items-center justify-between mt-4 gap-3 page-enter">
+            <p class="text-xs text-slate-400 font-medium">
+                Showing <span class="font-bold text-slate-600">${phones.length}</span> of
+                <span class="font-bold text-slate-600">${state.phones.total.toLocaleString()}</span> records
+                — Page <span class="font-bold text-slate-600">${state.phones.page}</span> of
+                <span class="font-bold text-slate-600">${state.phones.totalPages}</span>
+            </p>
+            ${buildPager()}
+        </div>
     `;
+
+    // Attach search listener (debounced)
+    const searchEl = document.getElementById('phone-search');
+    const debouncedSearch = debounce(() => {
+        state.phones.search = searchEl.value;
+        renderPhones(true);
+    }, 400);
+    searchEl.addEventListener('input', debouncedSearch);
+    // Focus at end of input text
+    searchEl.focus();
+    searchEl.setSelectionRange(searchEl.value.length, searchEl.value.length);
+
+    // Per-page change
+    document.getElementById('phone-limit').addEventListener('change', e => {
+        state.phones.limit = parseInt(e.target.value);
+        renderPhones(true);
+    });
 }
+
+function goPhonePage(page) {
+    state.phones.page = page;
+    renderPhones();
+}
+
+
 
 async function addPhone() {
     if (state.data.groups.length === 0) await apiCall('/groups').then(d => state.data.groups = d);
@@ -297,17 +415,22 @@ async function addPhone() {
 }
 
 async function bulkAddPhone() {
-    if (state.data.groups.length === 0) await apiCall('/groups').then(d => state.data.groups = d);
-
     const { value: formValues } = await Swal.fire({
-        title: 'Bulk Mass Import',
+        title: 'Bulk Import — Auto Group',
         html: `
             <div class="text-left space-y-4 pt-4">
                 <div>
-                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Phone Numbers (One per line or comma-separated)</label>
-                    <textarea id="swal-phones-mass" class="swal2-textarea !mt-1 w-full m-0 rounded-xl" style="height: 150px" placeholder="081234567890\n089876543210"></textarea>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Phone Numbers <span class="normal-case font-normal">(one per line or comma-separated)</span></label>
+                    <textarea id="swal-phones-mass" class="swal2-textarea !mt-1 w-full m-0 rounded-xl" style="height: 160px" placeholder="081234567890&#10;089876543210&#10;082..."></textarea>
+                </div>
+                <div id="swal-counter" class="text-xs text-center font-semibold text-slate-400 -mt-2 mb-1">
+                    Enter numbers above — groups of <strong>500</strong> will be created automatically
                 </div>
                 <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Group Name Prefix</label>
+                        <input id="swal-prefix" class="swal2-input !mt-1 !w-full m-0 rounded-xl" placeholder="e.g. Batch" value="Batch">
+                    </div>
                     <div>
                         <label class="text-xs font-bold text-slate-500 uppercase ml-1">Channel Type</label>
                         <select id="swal-type" class="swal2-input !mt-1 !w-full rounded-xl">
@@ -315,27 +438,45 @@ async function bulkAddPhone() {
                             <option value="sms">SMS</option>
                         </select>
                     </div>
-                    <div>
-                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Assign to Group</label>
-                        <select id="swal-group-id" class="swal2-input !mt-1 !w-full rounded-xl">
-                            <option value="">No Group</option>
-                            ${state.data.groups.map(g => `<option value="${g.id}">${g.title || `Group #${g.id}`} (${g.type})</option>`).join('')}
-                        </select>
-                    </div>
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Phones per Group <span class="normal-case font-normal text-slate-400">(1 – 1000)</span></label>
+                    <input id="swal-chunk" type="number" min="1" max="1000" value="500"
+                        class="swal2-input !mt-1 !w-full m-0 rounded-xl"
+                        placeholder="e.g. 500">
                 </div>
                 ${renderToggle('swal-status', true, 'Set all as Active')}
             </div>
         `,
-        confirmButtonText: 'Import Numbers',
+        confirmButtonText: 'Import & Auto-Group',
         confirmButtonColor: '#2563eb',
         customClass: { confirmButton: 'rounded-xl py-3 px-8' },
+        didOpen: () => {
+            const textarea = document.getElementById('swal-phones-mass');
+            const chunkEl  = document.getElementById('swal-chunk');
+            const counter  = document.getElementById('swal-counter');
+            const updateCounter = () => {
+                const nums  = textarea.value.split(/[\n,]+/).map(p => p.trim()).filter(p => p.length > 0);
+                const chunk = Math.min(1000, Math.max(1, parseInt(chunkEl.value) || 500));
+                if (nums.length === 0) {
+                    counter.innerHTML = `Enter numbers above — groups of <strong>${chunk}</strong> will be created automatically`;
+                    counter.className = 'text-xs text-center font-semibold text-slate-400 -mt-2 mb-1';
+                } else {
+                    const groups = Math.ceil(nums.length / chunk);
+                    counter.innerHTML = `<span class="text-blue-600">${nums.length.toLocaleString()} number(s)</span> → <span class="text-emerald-600">${groups} group(s)</span> of max <strong>${chunk}</strong> each`;
+                    counter.className = 'text-xs text-center font-semibold -mt-2 mb-1';
+                }
+            };
+            textarea.addEventListener('input', updateCounter);
+            chunkEl.addEventListener('input', updateCounter);
+        },
         preConfirm: () => {
-            const rawText = document.getElementById('swal-phones-mass').value;
-            const type = document.getElementById('swal-type').value;
-            const group_id = document.getElementById('swal-group-id').value || null;
-            const status = document.getElementById('swal-status').checked;
+            const rawText   = document.getElementById('swal-phones-mass').value;
+            const type      = document.getElementById('swal-type').value;
+            const status    = document.getElementById('swal-status').checked;
+            const prefix    = document.getElementById('swal-prefix').value.trim() || 'Batch';
+            const chunkSize = Math.min(1000, Math.max(1, parseInt(document.getElementById('swal-chunk').value) || 500));
 
-            // Simple parsing: split by newline or comma, then trim and filter empty
             const phoneList = rawText.split(/[\n,]+/).map(p => p.trim()).filter(p => p.length > 0);
 
             if (phoneList.length === 0) {
@@ -343,29 +484,29 @@ async function bulkAddPhone() {
                 return false;
             }
 
-            return phoneList.map(phone => ({
-                phone,
-                type,
-                group_id,
-                status
-            }));
+            return { phones: phoneList, type, status, groupPrefix: prefix, chunkSize };
         }
     });
 
     if (formValues) {
-        await apiCall('/phones/bulk', 'POST', formValues);
-        Swal.fire({ 
-            icon: 'success', 
-            title: 'Imported!', 
-            text: `Successfully added ${formValues.length} numbers.`,
-            toast: true, 
-            position: 'top-end', 
-            timer: 3000, 
-            showConfirmButton: false 
-        });
-        router.navigate('phones');
+        try {
+            const result = await apiCall('/phones/bulk-auto-group', 'POST', formValues);
+            Swal.fire({
+                icon: 'success',
+                title: 'Import Complete!',
+                html: `<p class="text-slate-600">${result.message}</p>
+                       <p class="text-xs text-slate-400 mt-1">${formValues.chunkSize} phones per group</p>
+                       <p class="text-xs text-slate-400 mt-2">${result.groups.map(g => `<span class="inline-block bg-slate-100 rounded px-2 py-0.5 mr-1 mb-1">${g.title}</span>`).join('')}</p>`,
+                confirmButtonColor: '#2563eb',
+                customClass: { confirmButton: 'rounded-xl' }
+            });
+            router.navigate('phones');
+        } catch (e) {
+            // Error already shown by apiCall
+        }
     }
 }
+
 
 async function editPhone(id) {
     const p = state.data.phones.find(x => x.id === id);
