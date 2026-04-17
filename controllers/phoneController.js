@@ -1,5 +1,6 @@
 const { Phone, Group } = require('../models');
 const { Op } = require('sequelize');
+const xlsx = require('xlsx');
 
 exports.getAll = async (req, res) => {
     try {
@@ -168,5 +169,87 @@ exports.bulkCreateAutoGroup = async (req, res) => {
     } catch (error) {
         await t.rollback();
         res.status(400).json({ error: error.message });
+    }
+};
+
+/**
+ * Import phones from Excel file with automatic grouping.
+ */
+exports.importExcel = async (req, res) => {
+    const sequelize = Group.sequelize;
+    const t = await sequelize.transaction();
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: 'Excel file is required' });
+        }
+
+        const { groupPrefix, chunkSize, type, status } = req.body;
+
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const data = xlsx.utils.sheet_to_json(worksheet);
+
+        if (data.length === 0) {
+            return res.status(400).json({ message: 'Excel file is empty' });
+        }
+
+        // Identify phone column
+        const firstRow = data[0];
+        const phoneKey = Object.keys(firstRow).find(k => k.toLowerCase() === 'phone');
+        
+        let phoneList = [];
+        if (phoneKey) {
+            phoneList = data.map(row => row[phoneKey]).filter(p => p !== undefined && p !== null);
+        } else {
+            // Fallback to the first column
+            const firstKey = Object.keys(firstRow)[0];
+            phoneList = data.map(row => row[firstKey]).filter(p => p !== undefined && p !== null);
+        }
+
+        // Clean phone numbers
+        phoneList = phoneList.map(p => String(p).trim()).filter(p => p !== "");
+
+        if (phoneList.length === 0) {
+            return res.status(400).json({ message: 'No phone numbers found in the Excel file' });
+        }
+
+        const CHUNK_SIZE = Math.min(1000, Math.max(1, parseInt(chunkSize) || 500));
+        const prefix = (groupPrefix || 'Auto Group').trim();
+        const createdGroups = [];
+        const createdPhonesCount = phoneList.length;
+
+        for (let i = 0; i < phoneList.length; i += CHUNK_SIZE) {
+            const chunk = phoneList.slice(i, i + CHUNK_SIZE);
+            const groupIndex = Math.floor(i / CHUNK_SIZE) + 1;
+
+            const group = await Group.create({
+                title: `${prefix} ${groupIndex}`,
+                type: type || 'whatsapp',
+                status: status === 'true' || status === true || status === undefined
+            }, { transaction: t });
+
+            createdGroups.push(group);
+
+            const phoneRecords = chunk.map(phone => ({
+                phone: String(phone).trim(),
+                type: type || 'whatsapp',
+                group_id: group.id,
+                status: status === 'true' || status === true || status === undefined
+            }));
+
+            await Phone.bulkCreate(phoneRecords, { transaction: t });
+        }
+
+        await t.commit();
+
+        res.status(201).json({
+            message: `Successfully created ${createdGroups.length} group(s) with ${createdPhonesCount} phone(s).`,
+            groups: createdGroups,
+            totalPhones: createdPhonesCount
+        });
+    } catch (error) {
+        await t.rollback();
+        res.status(500).json({ error: error.message });
     }
 };

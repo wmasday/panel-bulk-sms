@@ -254,6 +254,9 @@ async function renderPhones(resetPage = false) {
                 <p class="text-slate-500">Manage individual sender numbers</p>
             </div>
             <div class="flex space-x-3">
+                <button onclick="importExcelPopup()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-200 flex items-center">
+                    <i class="fas fa-file-excel mr-2 text-xs"></i> Import Excel
+                </button>
                 <button onclick="bulkAddPhone()" class="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-xl transition-all shadow-lg shadow-slate-200 flex items-center">
                     <i class="fas fa-file-import mr-2 text-xs"></i> Bulk Add
                 </button>
@@ -503,6 +506,160 @@ async function bulkAddPhone() {
             router.navigate('phones');
         } catch (e) {
             // Error already shown by apiCall
+        }
+    }
+}
+
+async function importExcelPopup() {
+    const { value: formValues } = await Swal.fire({
+        title: 'Import Phones from Excel',
+        html: `
+            <div class="text-left space-y-4 pt-4">
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Excel File Source</label>
+                    <div class="file-upload-wrapper mt-1">
+                        <label for="swal-file" class="file-upload-area" id="drop-area">
+                            <i class="fas fa-cloud-upload-alt" id="upload-icon"></i>
+                            <span class="upload-text" id="file-name-display">Click to upload or drag and drop</span>
+                            <span class="upload-hint">Supported: .xlsx, .xls, .csv</span>
+                        </label>
+                        <input type="file" id="swal-file" class="file-upload-input" accept=".xlsx,.xls,.csv">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Group Name Prefix</label>
+                        <input id="swal-prefix" class="swal2-input !mt-1 !w-full m-0 rounded-xl" placeholder="e.g. Excel Batch" value="Excel Batch">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Channel Type</label>
+                        <select id="swal-type" class="swal2-input !mt-1 !w-full rounded-xl">
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="sms">SMS</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Phones per Group <span class="normal-case font-normal text-slate-400">(1 – 1000)</span></label>
+                    <input id="swal-chunk" type="number" min="1" max="1000" value="500"
+                        class="swal2-input !mt-1 !w-full m-0 rounded-xl"
+                        placeholder="e.g. 500">
+                </div>
+                ${renderToggle('swal-status', true, 'Set all as Active')}
+            </div>
+        `,
+        confirmButtonText: 'Start Upload & Import',
+        confirmButtonColor: '#059669',
+        customClass: { confirmButton: 'rounded-xl py-3 px-8' },
+        didOpen: () => {
+            const fileInput = document.getElementById('swal-file');
+            const dropArea = document.getElementById('drop-area');
+            const nameDisplay = document.getElementById('file-name-display');
+            const icon = document.getElementById('upload-icon');
+
+            fileInput.addEventListener('change', (e) => {
+                if (fileInput.files && fileInput.files.length > 0) {
+                    nameDisplay.innerText = fileInput.files[0].name;
+                    nameDisplay.classList.add('text-blue-600');
+                    dropArea.classList.add('border-blue-400', 'bg-blue-50/50');
+                    icon.className = 'fas fa-file-excel text-emerald-500';
+                }
+            });
+
+            // Basic drag and drop visual feedback
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    dropArea.classList.add('dragover');
+                }, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    dropArea.classList.remove('dragover');
+                }, false);
+            });
+
+            dropArea.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                fileInput.files = files;
+                // Trigger change event manually
+                fileInput.dispatchEvent(new Event('change'));
+            }, false);
+        },
+        preConfirm: () => {
+            const fileInput = document.getElementById('swal-file');
+            const prefix = document.getElementById('swal-prefix').value.trim() || 'Excel Batch';
+            const type = document.getElementById('swal-type').value;
+            const chunkSize = document.getElementById('swal-chunk').value;
+            const status = document.getElementById('swal-status').checked;
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                Swal.showValidationMessage('Please select an Excel file');
+                return false;
+            }
+
+            return {
+                file: fileInput.files[0],
+                groupPrefix: prefix,
+                chunkSize,
+                type,
+                status
+            };
+        }
+    });
+
+    if (formValues) {
+        Swal.fire({
+            title: 'Processing...',
+            text: 'Parsing Excel and creating groups. This may take a moment.',
+            allowOutsideClick: false,
+            didOpen: () => {
+                Swal.showLoading();
+            }
+        });
+
+        const formData = new FormData();
+        formData.append('file', formValues.file);
+        formData.append('groupPrefix', formValues.groupPrefix);
+        formData.append('chunkSize', formValues.chunkSize);
+        formData.append('type', formValues.type);
+        formData.append('status', formValues.status);
+
+        try {
+            const response = await fetch(`${API_BASE}/phones/import-excel`, {
+                method: 'POST',
+                headers: {
+                    'x-api-key': state.apiKey
+                },
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.message || result.error || 'Failed to import Excel');
+            }
+
+            Swal.fire({
+                icon: 'success',
+                title: 'Import Successful!',
+                html: `<p class="text-slate-600">${result.message}</p>
+                       <p class="text-xs text-slate-400 mt-2">${result.groups.map(g => `<span class="inline-block bg-slate-100 rounded px-2 py-0.5 mr-1 mb-1">${g.title}</span>`).join('')}</p>`,
+                confirmButtonColor: '#059669',
+                customClass: { confirmButton: 'rounded-xl' }
+            });
+            router.navigate('phones');
+        } catch (error) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Import Failed',
+                text: error.message,
+                confirmButtonColor: '#ef4444',
+                customClass: { confirmButton: 'rounded-xl' }
+            });
         }
     }
 }

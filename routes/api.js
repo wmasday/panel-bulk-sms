@@ -5,6 +5,8 @@ const groupController = require('../controllers/groupController');
 const templateController = require('../controllers/templateController');
 const transactionController = require('../controllers/transactionController');
 const authMiddleware = require('../middleware/auth');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 router.use(authMiddleware);
 
@@ -14,6 +16,7 @@ router.get('/phones/:id', phoneController.getById);
 router.post('/phones', phoneController.create);
 router.post('/phones/bulk', phoneController.bulkCreate);
 router.post('/phones/bulk-auto-group', phoneController.bulkCreateAutoGroup);
+router.post('/phones/import-excel', upload.single('file'), phoneController.importExcel);
 router.put('/phones/:id', phoneController.update);
 router.delete('/phones/:id', phoneController.delete);
 
